@@ -257,11 +257,11 @@ func main() {
 						}
 
 						if val != nil {
-							path := strings.ReplaceAll(s.reader.Descriptor().Path(), ".list.element.", "[].")
+							path := strings.ReplaceAll(s.reader.Descriptor().Path(), ".list.element", "[]")
 							Insert(row, path, val)
 						}
 
-						if s.repLevels[s.levelOffset] == 0 { // get all repetitions of this path
+						if s.levelOffset < int64(len(s.repLevels)) && s.repLevels[s.levelOffset] == 0 { // get all repetitions of this path
 							break
 						}
 					}

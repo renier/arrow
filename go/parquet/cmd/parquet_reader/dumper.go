@@ -223,6 +223,15 @@ func Insert(data map[string]any, path string, value any) {
 			data[key] = append(target, m)
 		}
 	} else {
-		data[key] = value
+		switch leaf := data[key].(type) {
+		case []any:
+			data[key] = append(leaf, value)
+		case map[string]any:
+			data[key] = value
+		case nil:
+			data[key] = value
+		default:
+			data[key] = []any{data[key], value}
+		}
 	}
 }
