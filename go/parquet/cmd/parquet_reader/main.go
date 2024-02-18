@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -25,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/apache/arrow/go/v16/internal/json"
 	"github.com/apache/arrow/go/v16/parquet"
 	"github.com/apache/arrow/go/v16/parquet/file"
 	"github.com/apache/arrow/go/v16/parquet/metadata"
@@ -226,62 +226,60 @@ func main() {
 
 		switch {
 		case config.JSON:
-			fmt.Fprint(dataOut, "[")
+			var rows []map[string]any
 
 			scanners := make([]*Dumper, len(selectedColumns))
-			fields := make([]string, len(selectedColumns))
 			for idx, c := range selectedColumns {
 				col, err := rgr.Column(c)
 				if err != nil {
 					log.Fatalf("unable to fetch column=%d err=%s", c, err)
 				}
 				scanners[idx] = createDumper(col)
-				fields[idx] = col.Descriptor().Path()
 			}
 
-			var line string
 			for {
-				if line == "" {
-					line = "\n  {"
-				} else {
-					line = ",\n  {"
-				}
+				done := true
+				row := make(map[string]any)
+				for _, s := range scanners {
+					for { // get all repetitions
+						val, ok := s.Next()
+						if !ok {
+							break
+						}
+						done = false
 
-				data := false
-				first := true
-				for idx, s := range scanners {
-					if val, ok := s.Next(); ok {
-						if !data {
-							fmt.Fprint(dataOut, line)
+						switch v := val.(type) {
+						case parquet.ByteArray:
+							switch s.reader.Descriptor().ConvertedType() {
+							case schema.ConvertedTypes.UTF8, schema.ConvertedTypes.Enum:
+								val = v.String()
+							}
 						}
-						data = true
-						if val == nil {
-							continue
+
+						if val != nil {
+							path := strings.ReplaceAll(s.reader.Descriptor().Path(), ".list.element.", "[].")
+							Insert(row, path, val)
 						}
-						if !first {
-							fmt.Fprint(dataOut, ",")
+
+						if s.repLevels[s.levelOffset] == 0 { // get all repetitions of this path
+							break
 						}
-						first = false
-						switch val.(type) {
-						case bool, int32, int64, float32, float64:
-						default:
-							val = s.FormatValue(val, 0)
-						}
-						jsonVal, err := json.Marshal(val)
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "error: marshalling json for %+v, %s\n", val, err)
-							os.Exit(1)
-						}
-						fmt.Fprintf(dataOut, "\n    %q: %s", fields[idx], jsonVal)
 					}
 				}
-				if !data {
+
+				if done {
 					break
 				}
-				fmt.Fprint(dataOut, "\n  }")
+				rows = append(rows, row)
 			}
 
-			fmt.Fprintln(dataOut, "\n]")
+			b, err := json.MarshalIndent(rows, "", "  ")
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Fprintln(dataOut, string(b))
+
 		case config.CSV:
 			scanners := make([]*Dumper, len(selectedColumns))
 			for idx, c := range selectedColumns {

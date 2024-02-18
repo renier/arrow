@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/apache/arrow/go/v16/parquet"
@@ -144,10 +145,12 @@ func (dump *Dumper) FormatValue(val interface{}, width int) string {
 					binary.LittleEndian.Uint32(val[8:])))
 		}
 	case parquet.ByteArray:
-		if dump.reader.Descriptor().ConvertedType() == schema.ConvertedTypes.UTF8 {
+		switch dump.reader.Descriptor().ConvertedType() {
+		case schema.ConvertedTypes.UTF8, schema.ConvertedTypes.Enum:
 			return fmt.Sprintf("%"+fmtstring+"s", string(val))
+		default:
+			return fmt.Sprintf("% "+fmtstring+"X", val)
 		}
-		return fmt.Sprintf("% "+fmtstring+"X", val)
 	case parquet.FixedLenByteArray:
 		return fmt.Sprintf("% "+fmtstring+"X", val)
 	default:
@@ -179,4 +182,47 @@ func (dump *Dumper) Next() (interface{}, bool) {
 	dump.valueOffset++
 
 	return v, true
+}
+
+// GetOrCreate will return the value at the key path specified or create the key
+// if it doesn't exist at return a reference that will be a map, or slice, depending on
+// the key (keys ending in [] will get a slice).
+func Insert(data map[string]any, path string, value any) {
+	splitResult := strings.SplitN(path, ".", 2)
+	key := splitResult[0]
+	isList := strings.HasSuffix(key, "[]")
+	key = strings.TrimSuffix(key, "[]")
+
+	if _, exists := data[key]; !exists {
+		if isList {
+			data[key] = make([]any, 0, 1)
+		} else if len(splitResult) > 1 {
+			data[key] = map[string]any{}
+		}
+	}
+
+	if len(splitResult) > 1 {
+		path = splitResult[1]
+		switch target := data[key].(type) {
+		case map[string]any:
+			Insert(target, path, value)
+		case []any:
+			if len(target) > 0 {
+				for _, e := range target {
+					if m, ok := e.(map[string]any); ok {
+						splitResult := strings.SplitN(path, ".", 2)
+						if len(splitResult) > 0 && m[splitResult[0]] == nil {
+							Insert(m, path, value)
+							return
+						}
+					}
+				}
+			}
+			m := map[string]any{}
+			Insert(m, path, value)
+			data[key] = append(target, m)
+		}
+	} else {
+		data[key] = value
+	}
 }
